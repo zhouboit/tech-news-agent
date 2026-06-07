@@ -20,6 +20,99 @@ pub struct StockQuote {
     pub analysis: Option<String>,
 }
 
+pub struct MarketIndex {
+    pub name: String,
+    #[allow(dead_code)]
+    pub code: String,
+    pub current: f64,
+    pub change_pct: f64,
+}
+
+// --- Fetch market indices (上证, 深证, 创业板) ---
+
+pub async fn fetch_market_indices(client: &reqwest::Client) -> Vec<MarketIndex> {
+    let url = "http://hq.sinajs.cn/list=sh000001,sz399001,sz399006";
+
+    let resp = client
+        .get(url)
+        .header("Referer", "https://finance.sina.com.cn")
+        .send()
+        .await;
+
+    match resp {
+        Ok(resp) => {
+            let text = match resp.text().await {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("Index: read body error: {e}");
+                    return Vec::new();
+                }
+            };
+
+            let mut indices = Vec::new();
+            for line in text.lines() {
+                if let Some(idx) = parse_index_line(line) {
+                    indices.push(idx);
+                }
+            }
+            info!("Index: got {} indices", indices.len());
+            indices
+        }
+        Err(e) => {
+            warn!("Index: fetch error: {e}");
+            Vec::new()
+        }
+    }
+}
+
+fn extract_sina_code(line: &str) -> String {
+    line.find("hq_str_")
+        .and_then(|pos| {
+            let after = line.get(pos + 7..)?;
+            let prefix = if after.starts_with("sh") || after.starts_with("sz") {
+                2
+            } else {
+                0
+            };
+            after.get(prefix..)
+                .and_then(|s| s.split('=').next())
+                .map(|c| c.trim().to_string())
+        })
+        .unwrap_or_default()
+}
+
+fn parse_index_line(line: &str) -> Option<MarketIndex> {
+    let eq_pos = line.find('"')?;
+    let data = &line[eq_pos + 1..];
+    let end = data.rfind('"')?;
+    let data = &data[..end];
+
+    let fields: Vec<&str> = data.split(',').collect();
+    if fields.len() < 32 {
+        return None;
+    }
+
+    let name = fields[0].to_string();
+    let current: f64 = fields[3].parse().ok()?;
+    let yesterday_close: f64 = fields[2].parse().ok()?;
+    let change_pct = if yesterday_close > 0.0 {
+        (current - yesterday_close) / yesterday_close * 100.0
+    } else {
+        0.0
+    };
+
+    let code = extract_sina_code(line);
+
+    Some(MarketIndex {
+        name,
+        code,
+        current,
+        change_pct,
+    })
+}
+
+// --- Fetch individual stock quotes ---
+
 pub async fn fetch_stocks(config: &AppConfig) -> Vec<StockQuote> {
     let codes = &config.stock_watch_list;
     if codes.is_empty() {
@@ -105,15 +198,7 @@ fn parse_sina_line(line: &str) -> Option<StockQuote> {
         0.0
     };
 
-    let code = line
-        .find("hq_str_")
-        .and_then(|pos| {
-            let after = &line[pos + 8..];
-            let prefix = if after.starts_with("sh") || after.starts_with("sz") { 2 } else { 0 };
-            after.get(prefix..).and_then(|s| s.split('"').next().map(|c| c.to_string()))
-        })
-        .unwrap_or_default();
-
+    let code = extract_sina_code(line);
     Some(StockQuote {
         code,
         name,
@@ -217,8 +302,8 @@ pub async fn analyze_stocks_with_ai(quotes: &mut [StockQuote], config: &AppConfi
                 }
             };
 
-            let content = extract_json(&content);
-            match serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+            let json_str = extract_json(&content);
+            match serde_json::from_str::<Vec<serde_json::Value>>(&json_str) {
                 Ok(analyses) => {
                     let mut count = 0usize;
                     for a in &analyses {
@@ -232,7 +317,7 @@ pub async fn analyze_stocks_with_ai(quotes: &mut [StockQuote], config: &AppConfi
                             let text = if focus.is_empty() {
                                 comment.to_string()
                             } else {
-                                format!("{}\u{ff1a}{}", comment, focus)
+                                format!("{}：{}", comment, focus)
                             };
                             quotes[index - 1].analysis = Some(text);
                             count += 1;
@@ -269,9 +354,9 @@ pub struct StockNews {
 }
 
 pub async fn fetch_stock_news(client: &reqwest::Client, max_items: usize) -> Vec<StockNews> {
-    // Use East Money finance API for A-share hot news
+    // BK0473=股市热评, BK0510=要闻
     let url = format!(
-        "https://np-listapi.eastmoney.com/comm/web/getListInfo?client=web&type=1&pageSize={}&pageindex=1&order=1&fields=title,url,showTime",
+        "https://np-listapi.eastmoney.com/comm/web/getListInfo?client=web&type=1&pageSize={}&pageindex=1&order=1&fields=Art_Title,Art_Url,Art_ShowTime&mTypeAndCode=90.BK0473",
         max_items
     );
 
@@ -282,9 +367,7 @@ pub async fn fetch_stock_news(client: &reqwest::Client, max_items: usize) -> Vec
                 Err(_) => return Vec::new(),
             };
 
-            // East Money returns JSONP, extract JSON
-            let json_str = extract_json(&text);
-            match serde_json::from_str::<serde_json::Value>(&json_str) {
+            match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(val) => {
                     val["data"]["list"]
                         .as_array()
@@ -292,8 +375,8 @@ pub async fn fetch_stock_news(client: &reqwest::Client, max_items: usize) -> Vec
                             arr.iter()
                                 .take(max_items)
                                 .filter_map(|item| {
-                                    let title = item["title"].as_str()?.to_string();
-                                    let url = item["url"].as_str()?.to_string();
+                                    let title = item["Art_Title"].as_str()?.to_string();
+                                    let url = item["Art_Url"].as_str()?.to_string();
                                     Some(StockNews { title, url })
                                 })
                                 .collect()
@@ -309,31 +392,58 @@ pub async fn fetch_stock_news(client: &reqwest::Client, max_items: usize) -> Vec
 
 // --- Render ---
 
-pub fn render_stock_section(quotes: &[StockQuote], news: &[StockNews]) -> String {
-    if quotes.is_empty() && news.is_empty() {
+pub fn render_stock_section(
+    indices: &[MarketIndex],
+    quotes: &[StockQuote],
+    news: &[StockNews],
+) -> String {
+    if indices.is_empty() && quotes.is_empty() && news.is_empty() {
         return String::new();
     }
 
     let now = Local::now().format("%m-%d %H:%M");
     let mut md = format!(
-        "## \u{1f4c8} \u{80a1}\u{5e02}\u{884c}\u{60c5}\n> {}\n\n",
+        "## 📈 股市行情\n> {}\n\n",
         now
     );
 
-    // Stock quotes with AI analysis
-    for q in quotes {
-        let arrow = if q.change_pct > 0.01 { "\u{1f4c8}" }
-            else if q.change_pct < -0.01 { "\u{1f4c9}" }
-            else { "\u{2192}" };
-        let sign = if q.change_pct >= 0.0 { "+" } else { "" };
+    // Market indices overview
+    if !indices.is_empty() {
         md.push_str(&format!(
-            "**{}** ({})\n{} **{:.2}** ({}{:.2}%) | \u{5f00}: {:.2} \u{9ad8}: {:.2} \u{4f4e}: {:.2} | \u{91cf}: {:.0}\u{624b} \u{989d}: {:.0}\u{4e07}\n",
-            q.name, q.code, arrow, q.current, sign, q.change_pct,
-            q.open, q.high, q.low,
-            q.volume / 10000.0, q.amount / 10000.0,
+            "**大盘概览**\n"
         ));
-        if let Some(ref analysis) = q.analysis {
-            md.push_str(&format!("\u{1f50d} {}\n", analysis));
+        for idx in indices {
+            let arrow = if idx.change_pct > 0.01 { "📈" }
+                else if idx.change_pct < -0.01 { "📉" }
+                else { "→" };
+            let sign = if idx.change_pct >= 0.0 { "+" } else { "" };
+            md.push_str(&format!(
+                "{} {} **{:.2}** ({}{:.2}%)\n",
+                arrow, idx.name, idx.current, sign, idx.change_pct
+            ));
+        }
+        md.push('\n');
+    }
+
+    // Watched stock quotes
+    if !quotes.is_empty() {
+        md.push_str(&format!(
+            "**个股关注**\n"
+        ));
+        for q in quotes {
+            let arrow = if q.change_pct > 0.01 { "📈" }
+                else if q.change_pct < -0.01 { "📉" }
+                else { "→" };
+            let sign = if q.change_pct >= 0.0 { "+" } else { "" };
+            md.push_str(&format!(
+                "{} **{}** ({}) **{:.2}** ({}{:.2}%) | 开:{:.2} 高:{:.2} 低:{:.2} | 量:{:.0}手 额:{:.0}万\n",
+                arrow, q.name, q.code, q.current, sign, q.change_pct,
+                q.open, q.high, q.low,
+                q.volume / 10000.0, q.amount / 10000.0,
+            ));
+            if let Some(ref analysis) = q.analysis {
+                md.push_str(&format!("  🔍 {}\n", analysis));
+            }
         }
         md.push('\n');
     }
@@ -341,10 +451,10 @@ pub fn render_stock_section(quotes: &[StockQuote], news: &[StockNews]) -> String
     // Hot stock news
     if !news.is_empty() {
         md.push_str(&format!(
-            "### \u{1f525} \u{80a1}\u{5e02}\u{70ed}\u{70b9}\n\n"
+            "**🔥 市场热点**\n"
         ));
         for item in news {
-            md.push_str(&format!("- {} [\u{539f}\u{6587}]({})\n", item.title, item.url));
+            md.push_str(&format!("- {} [原文]({})\n", item.title, item.url));
         }
         md.push('\n');
     }

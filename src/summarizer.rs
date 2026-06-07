@@ -143,14 +143,21 @@ pub fn render_markdown(digest: &Digest) -> String {
         }
     }
 
-    // Intelligence insights
+    // Intelligence insights (deduplicate by url)
     let mut cross_domain = Vec::new();
     let mut breakthroughs = Vec::new();
+    let mut seen_cross: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut seen_break: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for cat in &digest.categories {
         for item in &cat.items {
+            if !seen_break.insert(&item.url) {
+                continue;
+            }
             let cats = classify_by_keywords(&item.title, &item.tags);
-            if cats.len() >= 2 {
+            if cats.len() >= 2 && seen_cross.insert(&item.url) {
                 cross_domain.push((item, cats));
+            } else if cats.len() < 2 {
+                seen_cross.insert(&item.url);
             }
             let lower = item.title.to_lowercase();
             if BREAKTHROUGH_KEYWORDS.iter().any(|kw| lower.contains(kw)) {

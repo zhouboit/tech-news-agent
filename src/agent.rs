@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use chrono::Timelike;
 
@@ -6,6 +8,7 @@ use crate::config::AppConfig;
 use crate::models::NewsItem;
 use crate::pusher::{serverchan::ServerChanPusher, wecom_bot::WeComBotPusher, wxpusher::WxPusherPusher, Pusher};
 use crate::sources::{arxiv::ArxivSource, dev_to::DevToSource, github::GitHubSource, hackernews::HackerNewsSource, rust_blog::RustBlogSource, security_advisory::SecurityAdvisorySource, NewsSource};
+use crate::stock::StockQuote;
 use crate::summarizer::{generate_digest, render_markdown};
 use tracing::{info, warn};
 
@@ -13,6 +16,8 @@ pub struct TechNewsAgent {
     config: Arc<AppConfig>,
     sources: Vec<Arc<dyn NewsSource>>,
     pushers: Vec<Box<dyn Pusher>>,
+    last_content_hash: Mutex<u64>,
+    last_stock_hash: Mutex<u64>,
 }
 
 impl TechNewsAgent {
@@ -42,6 +47,8 @@ impl TechNewsAgent {
             config: Arc::new(config),
             sources,
             pushers,
+            last_content_hash: Mutex::new(0),
+            last_stock_hash: Mutex::new(0),
         }
     }
 
@@ -61,24 +68,69 @@ impl TechNewsAgent {
             return;
         }
 
-        info!("Total {} items fetched, running AI analysis...", items.len());
-        crate::zhipu::analyze_items(&mut items, &self.config).await;
+        let news_hash = hash_items(&items);
+        let news_changed = {
+            let mut last = self.last_content_hash.lock().unwrap();
+            let changed = *last != news_hash;
+            *last = news_hash;
+            changed
+        };
+
+        if news_changed {
+            info!("Total {} items fetched (content changed), running AI analysis...", items.len());
+            crate::zhipu::analyze_items(&mut items, &self.config).await;
+        } else {
+            info!("Total {} items fetched (content unchanged), skipping AI analysis", items.len());
+        }
 
         info!("Generating digest...");
         let digest = generate_digest(items);
         let mut content = render_markdown(&digest);
 
-        let mut stock_quotes = crate::stock::fetch_stocks(&self.config).await;
-        crate::stock::analyze_stocks_with_ai(&mut stock_quotes, &self.config).await;
-
         let stock_client = reqwest::Client::builder()
             .user_agent("TechNewsAgent/0.1")
             .build()
-            .expect("build stock news client");
+            .expect("build stock client");
+
+        // Market indices (always fetched, not cached)
+        let market_indices = crate::stock::fetch_market_indices(&stock_client).await;
+
+        let mut stock_quotes = crate::stock::fetch_stocks(&self.config).await;
+        let stock_hash = hash_stocks(&stock_quotes);
+        let stock_changed = {
+            let mut last = self.last_stock_hash.lock().unwrap();
+            let changed = *last != stock_hash;
+            *last = stock_hash;
+            changed
+        };
+
+        if stock_changed {
+            info!("Stock data changed, running stock AI analysis...");
+            crate::stock::analyze_stocks_with_ai(&mut stock_quotes, &self.config).await;
+        } else {
+            info!("Stock data unchanged, skipping stock AI analysis");
+        }
+
         let stock_news = crate::stock::fetch_stock_news(&stock_client, 5).await;
 
-        if !stock_quotes.is_empty() || !stock_news.is_empty() {
-            let stock_section = crate::stock::render_stock_section(&stock_quotes, &stock_news);
+        // Policy section (before stock, so it's not truncated)
+        let mut policy_news = crate::policy::fetch_policy_news(&stock_client).await;
+        crate::policy::analyze_policies_with_ai(
+            &mut policy_news,
+            &self.config.stock_watch_list,
+            &self.config,
+        )
+        .await;
+        let policy_section = crate::policy::render_policy_section(&policy_news);
+        if !policy_section.is_empty() {
+            info!("Policy section: {} chars", policy_section.len());
+            content = format!("{}\n---\n\n{}", policy_section, content);
+        } else {
+            info!("Policy section: empty (no analyzed policies)");
+        }
+
+        if !market_indices.is_empty() || !stock_quotes.is_empty() || !stock_news.is_empty() {
+            let stock_section = crate::stock::render_stock_section(&market_indices, &stock_quotes, &stock_news);
             content = format!("{}\n---\n\n{}", stock_section, content);
         }
 
@@ -111,7 +163,7 @@ impl TechNewsAgent {
         }
 
         let mut all_items = Vec::new();
-        let mut seen_urls = std::collections::HashSet::new();
+        let mut seen_urls = HashSet::new();
 
         for handle in handles {
             match handle.await {
@@ -134,4 +186,28 @@ impl TechNewsAgent {
 
         all_items
     }
+}
+
+fn hash_items(items: &[NewsItem]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    for item in items {
+        item.title.hash(&mut hasher);
+        item.url.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn hash_stocks(quotes: &[StockQuote]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    for q in quotes {
+        q.code.hash(&mut hasher);
+        q.current.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
 }

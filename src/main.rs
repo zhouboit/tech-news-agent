@@ -1,6 +1,7 @@
 mod agent;
 mod config;
 mod models;
+mod policy;
 mod pusher;
 mod scheduler;
 mod sources;
