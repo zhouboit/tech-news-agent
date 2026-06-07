@@ -18,6 +18,7 @@ pub struct TechNewsAgent {
     pushers: Vec<Box<dyn Pusher>>,
     last_content_hash: Mutex<u64>,
     last_stock_hash: Mutex<u64>,
+    last_seen_urls: Mutex<HashSet<String>>,
 }
 
 impl TechNewsAgent {
@@ -49,6 +50,7 @@ impl TechNewsAgent {
             pushers,
             last_content_hash: Mutex::new(0),
             last_stock_hash: Mutex::new(0),
+            last_seen_urls: Mutex::new(HashSet::new()),
         }
     }
 
@@ -84,7 +86,17 @@ impl TechNewsAgent {
         }
 
         info!("Generating digest...");
-        let digest = generate_digest(items);
+        let current_urls: HashSet<String> = items.iter().map(|i| i.url.clone()).collect();
+        let new_urls = {
+            let mut seen = self.last_seen_urls.lock().unwrap();
+            let new: HashSet<String> = current_urls.difference(&*seen).cloned().collect();
+            *seen = current_urls;
+            new
+        };
+        if !new_urls.is_empty() {
+            info!("{} new items in this cycle", new_urls.len());
+        }
+        let digest = generate_digest(items, new_urls);
         let mut content = render_markdown(&digest);
 
         let stock_client = reqwest::Client::builder()

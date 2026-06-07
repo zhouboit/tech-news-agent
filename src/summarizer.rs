@@ -1,5 +1,6 @@
 use crate::models::{Category, Digest, NewsItem};
 use chrono::{Local, Utc};
+use std::collections::HashSet;
 
 const CLASSIFY_RULES: &[(&str, &[&str])] = &[
     ("AI/ML", &["ai", "ml", "llm", "gpt", "machine learning", "deep learning", "transformer", "claude", "openai"]),
@@ -63,7 +64,7 @@ fn emoji_for(name: &str) -> &str {
         .unwrap_or("\u{1f4a1}")
 }
 
-pub fn generate_digest(items: Vec<NewsItem>) -> Digest {
+pub fn generate_digest(items: Vec<NewsItem>, new_urls: HashSet<String>) -> Digest {
     let mut category_map: std::collections::BTreeMap<String, Vec<NewsItem>> =
         std::collections::BTreeMap::new();
 
@@ -94,6 +95,7 @@ pub fn generate_digest(items: Vec<NewsItem>) -> Digest {
         generated_at: Utc::now(),
         total_items: total,
         categories,
+        new_urls,
     }
 }
 
@@ -135,9 +137,10 @@ pub fn render_markdown(digest: &Digest) -> String {
                 md.push_str(&format!("\u{1f4dd} {}\n", s));
             }
 
+            let new_tag = if digest.new_urls.contains(&item.url) { " [NEW]" } else { "" };
             md.push_str(&format!(
-                "\u{1f4c1} {} | {}\u{3001}[\u{539f}\u{6587}]({})\n",
-                date_str, source_name, item.url
+                "\u{1f4c1} {} | {}{}、[\u{539f}\u{6587}]({})\n",
+                date_str, source_name, new_tag, item.url
             ));
             md.push('\n');
         }
@@ -212,7 +215,8 @@ pub fn render_brief_markdown(digest: &Digest) -> String {
             let name = item.ai_analysis.as_ref()
                 .map(|a| a.brief_name.as_str())
                 .unwrap_or(&item.title);
-            md.push_str(&format!("- {} [原文]({})\n", name, item.url));
+            let new_tag = if digest.new_urls.contains(&item.url) { " [NEW]" } else { "" };
+            md.push_str(&format!("- {}{} [原文]({})\n", name, new_tag, item.url));
         }
         md.push('\n');
     }

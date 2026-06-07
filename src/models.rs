@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiAnalysis {
@@ -52,6 +53,8 @@ pub struct Digest {
     pub generated_at: DateTime<Utc>,
     pub total_items: usize,
     pub categories: Vec<Category>,
+    #[serde(skip)]
+    pub new_urls: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
