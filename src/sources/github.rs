@@ -76,6 +76,7 @@ impl NewsSource for GitHubSource {
                         published_at: None,
                         tags,
                         author: None,
+                        ai_analysis: None,
                     });
                 }
             }

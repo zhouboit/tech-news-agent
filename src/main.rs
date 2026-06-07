@@ -5,6 +5,7 @@ mod pusher;
 mod scheduler;
 mod sources;
 mod summarizer;
+mod zhipu;
 
 use std::sync::Arc;
 

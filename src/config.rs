@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub max_items_per_source: usize,
     pub min_score: i64,
     pub github_langs: Vec<String>,
+    pub zhipu_api_key: Option<String>,
+    pub zhipu_model: String,
 }
 
 impl AppConfig {
@@ -48,6 +50,11 @@ impl AppConfig {
                         "typescript".to_string(),
                     ]
                 }),
+            zhipu_api_key: env::var("ZHIPU_API_KEY").ok().filter(|s| !s.is_empty()),
+            zhipu_model: env::var("ZHIPU_MODEL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "glm-4".to_string()),
         }
     }
 

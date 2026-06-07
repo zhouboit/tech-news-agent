@@ -1,5 +1,5 @@
 use crate::models::{Category, Digest, NewsItem};
-use chrono::Utc;
+use chrono::{Local, Utc};
 
 const CLASSIFY_RULES: &[(&str, &[&str])] = &[
     ("AI/ML", &["ai", "ml", "llm", "gpt", "machine learning", "deep learning", "transformer", "claude", "openai"]),
@@ -9,6 +9,8 @@ const CLASSIFY_RULES: &[(&str, &[&str])] = &[
     ("DevOps", &["kubernetes", "docker", "k8s", "terraform", "ci/cd", "devops", "cloud"]),
     ("\u{5b89}\u{5168}", &["security", "vulnerability", "cve", "exploit", "encryption"]),
     ("\u{5f00}\u{6e90}", &["open source", "oss", "github"]),
+    ("\u{8bba}\u{6587}", &["paper", "arxiv", "research", "study", "neural", "benchmark", "dataset", "pretrain", "fine-tun", "attention mechanism"]),
+    ("\u{4e13}\u{5229}", &["patent", "intellectual property", "trademark", "filing", "\u{4e13}\u{5229}"]),
 ];
 
 const EMOJI_MAP: &[(&str, &str)] = &[
@@ -19,8 +21,19 @@ const EMOJI_MAP: &[(&str, &str)] = &[
     ("DevOps", "\u{2601}\u{fe0f}"),
     ("\u{5b89}\u{5168}", "\u{1f512}"),
     ("\u{5f00}\u{6e90}", "\u{1f4e6}"),
+    ("\u{8bba}\u{6587}", "\u{1f4c4}"),
+    ("\u{4e13}\u{5229}", "\u{1f4dc}"),
     ("\u{5176}\u{4ed6}\u{6280}\u{672f}", "\u{1f4a1}"),
 ];
+
+const BREAKTHROUGH_KEYWORDS: &[&str] = &[
+    "breakthrough", "novel", "state-of-the-art", "sota", "first", "record",
+    "outperform", "surpass", "groundbreaking", "milestone", "leap",
+];
+
+const INSIGHT_HEADER: &str = "\u{1f52c} \u{60c5}\u{62a5}\u{6d1e}\u{5bdf}";
+const BREAKTHROUGH_HEADER: &str = "\u{1f4a5} \u{6280}\u{672f}\u{7a81}\u{7834}\u{52a8}\u{5411}";
+const CROSS_DOMAIN_HEADER: &str = "\u{1f517} \u{8de8}\u{754c}\u{5173}\u{8054}";
 
 fn classify_by_keywords(title: &str, tags: &[String]) -> Vec<String> {
     let lower_title = title.to_lowercase();
@@ -87,40 +100,93 @@ pub fn generate_digest(items: Vec<NewsItem>) -> Digest {
 pub fn render_markdown(digest: &Digest) -> String {
     let mut md = String::new();
     md.push_str(&format!(
-        "# \u{1f4f0} Tech News Digest\n\n"
-    ));
-    md.push_str(&format!(
-        "> \u{751f}\u{6210}\u{4e8e}: {} | \u{5171} {} \u{6761}\u{8d44}\u{8baf}\n\n",
-        digest.generated_at.format("%Y-%m-%d %H:%M UTC"),
+        "# \u{1f4f0} \u{6280}\u{672f}\u{8d44}\u{8baf}\u{65e5}\u{62a5}\n> {} | {}\u{6761}\u{8d44}\u{8baf}\n\n",
+        digest.generated_at.with_timezone(&Local).format("%Y-%m-%d %H:%M"),
         digest.total_items
     ));
 
     for cat in &digest.categories {
         md.push_str(&format!("## {} {}\n\n", cat.emoji, cat.name));
         for (i, item) in cat.items.iter().enumerate() {
-            md.push_str(&format!(
-                "{}. [{}]({})",
-                i + 1,
-                item.title,
-                item.url
-            ));
-            if let Some(ref summary) = item.summary {
-                let s: String = summary.chars().take(100).collect();
-                md.push_str(&format!(" - {}", s));
-            }
-            md.push_str("\n");
-            if !item.tags.is_empty() {
+            let date_str = item
+                .published_at
+                .map(|dt| dt.with_timezone(&Local).format("%m-%d").to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let source_name = item.source.display_name();
+            md.push_str(&format!("**{}. {}**\n", i + 1, item.title));
+
+            if let Some(ref ai) = item.ai_analysis {
                 md.push_str(&format!(
-                    "   \u{1f3f7}\u{fe0f} {}\n",
-                    item.tags
-                        .iter()
-                        .map(|t| format!("`{}`", t))
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                    "\u{1f3f7}\u{fe0f} {}\n",
+                    ai.keywords.iter().map(|k| format!("`{}`", k)).collect::<Vec<_>>().join(" ")
                 ));
+                md.push_str(&format!("\u{1f4dd} {}\n", ai.summary_cn));
+                if !ai.impact.is_empty() {
+                    md.push_str(&format!("\u{1f4ca} {}\n", ai.impact));
+                }
+                if !ai.action.is_empty() {
+                    md.push_str(&format!("\u{1f4cb} {}\n", ai.action));
+                }
+                if !ai.prediction.is_empty() {
+                    md.push_str(&format!("\u{1f52d}\u{fe0f} {}\n", ai.prediction));
+                }
+            } else if let Some(ref summary) = item.summary {
+                let s: String = summary.chars().take(120).collect();
+                md.push_str(&format!("\u{1f4dd} {}\n", s));
+            }
+
+            md.push_str(&format!(
+                "\u{1f4c1} {} | {}\u{3001}[\u{539f}\u{6587}]({})\n",
+                date_str, source_name, item.url
+            ));
+            md.push('\n');
+        }
+    }
+
+    // Intelligence insights
+    let mut cross_domain = Vec::new();
+    let mut breakthroughs = Vec::new();
+    for cat in &digest.categories {
+        for item in &cat.items {
+            let cats = classify_by_keywords(&item.title, &item.tags);
+            if cats.len() >= 2 {
+                cross_domain.push((item, cats));
+            }
+            let lower = item.title.to_lowercase();
+            if BREAKTHROUGH_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+                breakthroughs.push(item);
             }
         }
-        md.push('\n');
+    }
+
+    if !cross_domain.is_empty() || !breakthroughs.is_empty() {
+        md.push_str("---\n\n");
+        md.push_str(&format!("## {}\n\n", INSIGHT_HEADER));
+
+        if !breakthroughs.is_empty() {
+            md.push_str(&format!("### {}\n\n", BREAKTHROUGH_HEADER));
+            for item in breakthroughs.iter().take(10) {
+                let name = item.ai_analysis.as_ref()
+                    .map(|a| a.brief_name.as_str())
+                    .unwrap_or(&item.title);
+                md.push_str(&format!("- {} [原文]({})\n", name, item.url));
+            }
+            md.push('\n');
+        }
+
+        if !cross_domain.is_empty() {
+            md.push_str(&format!("### {}\n\n", CROSS_DOMAIN_HEADER));
+            for (item, cats) in cross_domain.iter().take(10) {
+                let name = item.ai_analysis.as_ref()
+                    .map(|a| a.brief_name.as_str())
+                    .unwrap_or(&item.title);
+                md.push_str(&format!(
+                    "- {} [原文]({}) ({})\n",
+                    name, item.url, cats.join(" \u{2194} ")
+                ));
+            }
+            md.push('\n');
+        }
     }
 
     md
@@ -129,15 +195,17 @@ pub fn render_markdown(digest: &Digest) -> String {
 pub fn render_brief_markdown(digest: &Digest) -> String {
     let mut md = String::new();
     md.push_str(&format!(
-        "## \u{1f4f0} Tech News ({})\n",
-        digest.generated_at.format("%m-%d %H:%M")
+        "## \u{1f4f0} \u{6280}\u{672f}\u{8d44}\u{8baf} ({})\n",
+        digest.generated_at.with_timezone(&Local).format("%m-%d %H:%M")
     ));
 
     for cat in &digest.categories {
         md.push_str(&format!("> {} **{}**\n", cat.emoji, cat.name));
-        let top_items = cat.items.iter().take(5);
-        for item in top_items {
-            md.push_str(&format!("- [{}]({})\n", item.title, item.url));
+        for item in cat.items.iter().take(5) {
+            let name = item.ai_analysis.as_ref()
+                .map(|a| a.brief_name.as_str())
+                .unwrap_or(&item.title);
+            md.push_str(&format!("- {} [原文]({})\n", name, item.url));
         }
         md.push('\n');
     }

@@ -82,6 +82,7 @@ impl NewsSource for HackerNewsSource {
                         published_at: story.time.map(|t| DateTime::<Utc>::from_timestamp(t, 0).unwrap()),
                         tags: vec![],
                         author: story.by,
+                        ai_analysis: None,
                     });
                 }
                 Ok(Err(e)) => {

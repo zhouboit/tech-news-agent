@@ -79,6 +79,7 @@ impl NewsSource for RustBlogSource {
                 published_at: item.pub_date.as_deref().and_then(parse_rfc2822_date),
                 tags: vec!["rust".to_string()],
                 author: None,
+                ai_analysis: None,
             });
         }
 

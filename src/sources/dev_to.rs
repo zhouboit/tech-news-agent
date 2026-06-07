@@ -71,6 +71,7 @@ impl NewsSource for DevToSource {
                     published_at: None,
                     tags,
                     author: a.user.and_then(|u| u.name),
+                    ai_analysis: None,
                 }
             })
             .collect();

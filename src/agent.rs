@@ -5,7 +5,7 @@ use chrono::Timelike;
 use crate::config::AppConfig;
 use crate::models::NewsItem;
 use crate::pusher::{serverchan::ServerChanPusher, wecom_bot::WeComBotPusher, wxpusher::WxPusherPusher, Pusher};
-use crate::sources::{dev_to::DevToSource, github::GitHubSource, hackernews::HackerNewsSource, rust_blog::RustBlogSource, NewsSource};
+use crate::sources::{arxiv::ArxivSource, dev_to::DevToSource, github::GitHubSource, hackernews::HackerNewsSource, rust_blog::RustBlogSource, security_advisory::SecurityAdvisorySource, NewsSource};
 use crate::summarizer::{generate_digest, render_markdown};
 use tracing::{info, warn};
 
@@ -22,6 +22,8 @@ impl TechNewsAgent {
             Arc::new(GitHubSource::new()),
             Arc::new(RustBlogSource::new()),
             Arc::new(DevToSource::new()),
+            Arc::new(ArxivSource::new()),
+            Arc::new(SecurityAdvisorySource::new()),
         ];
 
         let mut pushers: Vec<Box<dyn Pusher>> = Vec::new();
@@ -53,13 +55,16 @@ impl TechNewsAgent {
             return;
         }
 
-        let items = self.fetch_all_sources().await;
+        let mut items = self.fetch_all_sources().await;
         if items.is_empty() {
             warn!("No news items fetched, skipping push");
             return;
         }
 
-        info!("Total {} items fetched, generating digest...", items.len());
+        info!("Total {} items fetched, running AI analysis...", items.len());
+        crate::zhipu::analyze_items(&mut items, &self.config).await;
+
+        info!("Generating digest...");
         let digest = generate_digest(items);
         let content = render_markdown(&digest);
 
