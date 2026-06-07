@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use chrono::Timelike;
+
 use crate::config::AppConfig;
 use crate::models::NewsItem;
 use crate::pusher::{serverchan::ServerChanPusher, wecom_bot::WeComBotPusher, wxpusher::WxPusherPusher, Pusher};
@@ -43,6 +45,13 @@ impl TechNewsAgent {
 
     pub async fn run_once(&self) {
         info!("Starting news fetch cycle...");
+
+        let hour = chrono::Local::now().hour();
+        let is_quiet_hours = hour >= 22 || hour < 6;
+        if is_quiet_hours {
+            info!("Quiet hours (22:00-06:00), skipping push");
+            return;
+        }
 
         let items = self.fetch_all_sources().await;
         if items.is_empty() {
