@@ -66,7 +66,21 @@ impl TechNewsAgent {
 
         info!("Generating digest...");
         let digest = generate_digest(items);
-        let content = render_markdown(&digest);
+        let mut content = render_markdown(&digest);
+
+        let mut stock_quotes = crate::stock::fetch_stocks(&self.config).await;
+        crate::stock::analyze_stocks_with_ai(&mut stock_quotes, &self.config).await;
+
+        let stock_client = reqwest::Client::builder()
+            .user_agent("TechNewsAgent/0.1")
+            .build()
+            .expect("build stock news client");
+        let stock_news = crate::stock::fetch_stock_news(&stock_client, 5).await;
+
+        if !stock_quotes.is_empty() || !stock_news.is_empty() {
+            let stock_section = crate::stock::render_stock_section(&stock_quotes, &stock_news);
+            content = format!("{}\n---\n\n{}", stock_section, content);
+        }
 
         for pusher in &self.pushers {
             match pusher.push(&digest, &content).await {

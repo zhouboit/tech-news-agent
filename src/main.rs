@@ -4,6 +4,7 @@ mod models;
 mod pusher;
 mod scheduler;
 mod sources;
+mod stock;
 mod summarizer;
 mod zhipu;
 

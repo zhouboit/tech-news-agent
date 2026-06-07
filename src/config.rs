@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub github_langs: Vec<String>,
     pub zhipu_api_key: Option<String>,
     pub zhipu_model: String,
+    pub stock_watch_list: Vec<String>,
 }
 
 impl AppConfig {
@@ -55,6 +56,11 @@ impl AppConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "glm-4".to_string()),
+            stock_watch_list: env::var("STOCK_WATCH_LIST")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
+                .unwrap_or_else(|| vec!["688326".to_string(), "600967".to_string()]),
         }
     }
 
